@@ -2,16 +2,12 @@ import logging
 
 import configs.privatelink_config as pl
 import ptf.testutils as testutils
-#import ptf.dataplane
 import pytest
 import packets
 from scapy.all import Ether, IP, VXLAN, IPv6, UDP, GRE, TCP
 from constants import LOCAL_PTF_INTF, LOCAL_DUT_INTF, REMOTE_DUT_INTF,\
                       REMOTE_PTF_RECV_INTF, REMOTE_PTF_SEND_INTF
 from gnmi_utils import apply_messages
-#from packets import rand_udp_port_packets
-from tests.common.helpers.assertions import pytest_assert
-from configs.privatelink_config import TUNNEL1_ENDPOINT_IPS
 from tests.common import config_reload
 from tests.dash.dash_utils import verify_tunnel_packets
 from tests.dash.conftest import get_interface_ip
@@ -60,21 +56,16 @@ def dpu_setup(duthost, dpuhosts, dpu_index, skip_config):
         f'ip route replace {duthost.mgmt_ip}/32 via 169.254.200.254'
     )
     intfs = dpuhost.shell("show ip int")["stdout"]
+    logger.info(f"SENTHIL intfs output \n {intfs}")
     dpu_cmds = list()
     if "Loopback0" not in intfs:
-        dpu_cmds.append("config loopback add Loopback0")
-        dpu_cmds.append(
-            f"config interface ip add Loopback0 {pl.APPLIANCE_VIP}/32"
-        )
+        dpu_cmds.append(f"config interface ip add Loopback0 {pl.APPLIANCE_VIP}/32")
+
     if 'pensando' in dpuhost.facts['asic_type']:
         if "Ethernet0" not in intfs:
-            dpu_cmds.append("config int add Ethernet0")
-            dpu_cmds.append(
-                f"config int ip add Ethernet0 {dpuhost.dpu_data_port_ip}/31"
-            )
-    dpu_cmds.append(
-        f"ip route replace default via {dpuhost.npu_data_port_ip}"
-    )
+            dpu_cmds.append(f"config interface ip add Ethernet0 {dpuhost.dpu_data_port_ip}/31")
+
+    dpu_cmds.append(f"ip route replace default via {dpuhost.npu_data_port_ip}")
     dpuhost.shell_cmds(cmds=dpu_cmds)
 
 
@@ -86,35 +77,28 @@ def setup_npu_routes(duthost, dash_pl_config, skip_config, skip_cleanup, dpu_ind
         vm_nexthop_ip = get_interface_ip(duthost, dash_pl_config[LOCAL_DUT_INTF]).ip + 1
         pe_nexthop_ip = get_interface_ip(duthost, dash_pl_config[REMOTE_DUT_INTF]).ip + 1
 
-        cmds.append(f"ip route replace {pl.APPLIANCE_VIP}/32 via {dpuhost.dpu_data_port_ip}")
-        cmds.append(f"ip route replace {pl.VM1_PA}/32 via {vm_nexthop_ip}")
-        cmds.append(f"ip route replace {pl.PE_PA}/32 via {pe_nexthop_ip}")
-        cmds.append(f"ip route replace {pl.FASTPATH_FLOW1_REDIRECTED_DIP}/32 via {pe_nexthop_ip}")
-        cmds.append(f"ip route replace {pl.FASTPATH_FLOW2_REDIRECTED_DIP}/32 via {pe_nexthop_ip}")
-        cmds.append(f"ip route replace {pl.PL_REDIRECT_BACKEND_IP}/32 via {pe_nexthop_ip}")
+        cmds.append(f"config route add prefix {pl.APPLIANCE_VIP}/32 nexthop {dpuhost.dpu_data_port_ip}")
+        cmds.append(f"config route add prefix {pl.VM1_PA}/32 nexthop {vm_nexthop_ip}")
+        cmds.append(f"config route add prefix {pl.PE_PA}/32 nexthop {pe_nexthop_ip}")
+        cmds.append(f"config route add prefix {pl.FASTPATH_FLOW1_REDIRECTED_DIP}/32 nexthop {pe_nexthop_ip}")
+        cmds.append(f"config route add prefix {pl.FASTPATH_FLOW2_REDIRECTED_DIP}/32 nexthop {pe_nexthop_ip}")
+        cmds.append(f"config route add prefix {pl.PL_REDIRECT_BACKEND_IP}/32 nexthop {pe_nexthop_ip}")
         return_tunnel_endpoints = pl.TUNNEL1_ENDPOINT_IPS
         for tunnel_ip in return_tunnel_endpoints:
-            cmds.append(f"ip route replace {tunnel_ip}/32 via {vm_nexthop_ip}")
+            cmds.append(f"config route add prefix {tunnel_ip}/32 nexthop {vm_nexthop_ip}")
         nsg_tunnel_endpoints = pl.TUNNEL3_ENDPOINT_IPS
         for tunnel_ip in nsg_tunnel_endpoints:
-            cmds.append(f"ip route replace {tunnel_ip}/32 via {pe_nexthop_ip}")
+            cmds.append(f"config route add prefix {tunnel_ip}/32 nexthop {pe_nexthop_ip}")
 
         logger.info(f"Adding static routes: {cmds}")
         duthost.shell_cmds(cmds=cmds)
+        cleanup_cmds = [cmd.replace("add", "del") for cmd in cmds]
 
     yield
 
     if not skip_config and not skip_cleanup:
-        cmds = []
-        cmds.append(f"ip route del {pl.APPLIANCE_VIP}/32 via {dpuhost.dpu_data_port_ip}")
-        cmds.append(f"ip route del {pl.VM1_PA}/32 via {vm_nexthop_ip}")
-        cmds.append(f"ip route del {pl.PE_PA}/32 via {pe_nexthop_ip}")
-        for tunnel_ip in return_tunnel_endpoints:
-            cmds.append(f"ip route del {tunnel_ip}/32 via {vm_nexthop_ip}")
-        for tunnel_ip in nsg_tunnel_endpoints:
-            cmds.append(f"ip route del {tunnel_ip}/32 via {pe_nexthop_ip}")
         logger.info(f"Removing static routes: {cmds}")
-        duthost.shell_cmds(cmds=cmds)
+        duthost.shell_cmds(cmds=cleanup_cmds, continue_on_fail=True, module_ignore_errors=True)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -142,8 +126,8 @@ def common_setup_teardown(
         **pl.VNET2_CONFIG,
         **pl.ROUTE_GROUP1_CONFIG,
         **pl.METER_POLICY_V4_CONFIG,
-        **pl.RD_PORTMAP_CONFIG,
-        **pl.RD_PORTMAP_RANGE_CONFIG,
+        **pl.FP_RD_PORTMAP_CONFIG,
+        **pl.FP_RD_PORTMAP_RANGE_CONFIG,
         **pl.TUNNEL1_CONFIG,
         **pl.TUNNEL3_CONFIG
     }
@@ -185,14 +169,16 @@ def common_setup_teardown(
 
     yield
 
-    # Route rule removal is broken so config reload to cleanup for now
-    # https://github.com/sonic-net/sonic-buildimage/issues/23590
-    config_reload(dpuhost, safe_reload=True, yang_validate=False)
-    # apply_messages(localhost, duthost, ptfhost, pl.ENI_ROUTE_GROUP1_CONFIG, dpuhost.dpu_index, False)
-    # apply_messages(localhost, duthost, ptfhost, pl.ENI_TRUSTED_VNI_CONFIG, dpuhost.dpu_index, False)
-    # apply_messages(localhost, duthost, ptfhost, meter_rule_messages, dpuhost.dpu_index, False)
-    # apply_messages(localhost, duthost, ptfhost, route_and_mapping_messages, dpuhost.dpu_index, False)
-    # apply_messages(localhost, duthost, ptfhost, base_config_messages, dpuhost.dpu_index, False)
+    if 'pensando' in dpuhost.facts['asic_type']:
+        apply_messages(localhost, duthost, ptfhost, pl.ENI_ROUTE_GROUP1_CONFIG, dpuhost.dpu_index, False)
+        apply_messages(localhost, duthost, ptfhost, pl.ENI_TRUSTED_VNI_CONFIG, dpuhost.dpu_index, False)
+        apply_messages(localhost, duthost, ptfhost, meter_rule_messages, dpuhost.dpu_index, False)
+        apply_messages(localhost, duthost, ptfhost, route_and_mapping_messages, dpuhost.dpu_index, False)
+        apply_messages(localhost, duthost, ptfhost, base_config_messages, dpuhost.dpu_index, False)
+    else:
+        # Route rule removal is broken so config reload to cleanup for now
+        # https://github.com/sonic-net/sonic-buildimage/issues/23590
+        config_reload(dpuhost, safe_reload=True, yang_validate=False)
 
 
 @pytest.mark.parametrize("fastpath_tc", ['PL_FASTPATH', 'PL_REDIRECT_FASTPATH'])
@@ -230,7 +216,7 @@ def test_pl_fastpath(ptfadapter, dash_pl_config, fastpath_tc):
                                     <------- TCP FIN+ACK
           TCP ACK -------->
     """
-    tunnel_endpoint_counts = {ip: 0 for ip in TUNNEL1_ENDPOINT_IPS}
+    tunnel_endpoint_counts = {ip: 0 for ip in pl.TUNNEL1_ENDPOINT_IPS}
 
     # Build test packet
     _flow_num = 0
@@ -397,7 +383,7 @@ def test_plnsg_fastpath(ptfadapter, dash_pl_config, fastpath_tc):
                                     <------- TCP FIN+ACK
           TCP ACK -------->
     """
-    tunnel_endpoint_counts = {ip: 0 for ip in TUNNEL1_ENDPOINT_IPS}
+    tunnel_endpoint_counts = {ip: 0 for ip in pl.TUNNEL1_ENDPOINT_IPS}
 
     # Build test packet
     _flow_num = 0
