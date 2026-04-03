@@ -56,7 +56,7 @@ def dpu_setup(duthost, dpuhosts, dpu_index, skip_config):
         f'ip route replace {duthost.mgmt_ip}/32 via 169.254.200.254'
     )
     intfs = dpuhost.shell("show ip int")["stdout"]
-    logger.info(f"SENTHIL intfs output \n {intfs}")
+
     dpu_cmds = list()
     if "Loopback0" not in intfs:
         dpu_cmds.append(f"config interface ip add Loopback0 {pl.APPLIANCE_VIP}/32")
@@ -64,20 +64,27 @@ def dpu_setup(duthost, dpuhosts, dpu_index, skip_config):
     if 'pensando' in dpuhost.facts['asic_type']:
         if "Ethernet0" not in intfs:
             dpu_cmds.append(f"config interface ip add Ethernet0 {dpuhost.dpu_data_port_ip}/31")
-
-    dpu_cmds.append(f"ip route replace default via {dpuhost.npu_data_port_ip}")
     dpuhost.shell_cmds(cmds=dpu_cmds)
+
+    intfs = dpuhost.shell("show ip interfaces")["stdout"]
+    if dpuhost.dpu_data_port_ip  in intfs and dpuhost.npu_data_port_ip is not None:
+        dpu_cmds.append(f"ip route replace default via {dpuhost.npu_data_port_ip}")
+        dpuhost.shell_cmds(cmds=f"ip route replace default via {dpuhost.npu_data_port_ip}")
+        intfs = dpuhost.shell("show ip interfaces")["stdout"]
 
 
 @pytest.fixture(scope="module")
 def setup_npu_routes(duthost, dash_pl_config, skip_config, skip_cleanup, dpu_index, dpuhosts):
     dpuhost = dpuhosts[dpu_index]
+
     if not skip_config:
         cmds = []
         vm_nexthop_ip = get_interface_ip(duthost, dash_pl_config[LOCAL_DUT_INTF]).ip + 1
         pe_nexthop_ip = get_interface_ip(duthost, dash_pl_config[REMOTE_DUT_INTF]).ip + 1
 
-        cmds.append(f"config route add prefix {pl.APPLIANCE_VIP}/32 nexthop {dpuhost.dpu_data_port_ip}")
+        if dpuhost.dpu_data_port_ip is not None and dpuhost.npu_data_port_ip is not None:
+            cmds.append(f"config route add prefix {pl.APPLIANCE_VIP}/32 nexthop {dpuhost.dpu_data_port_ip}")
+
         cmds.append(f"config route add prefix {pl.VM1_PA}/32 nexthop {vm_nexthop_ip}")
         cmds.append(f"config route add prefix {pl.PE_PA}/32 nexthop {pe_nexthop_ip}")
         cmds.append(f"config route add prefix {pl.FASTPATH_FLOW1_REDIRECTED_DIP}/32 nexthop {pe_nexthop_ip}")
@@ -170,11 +177,25 @@ def common_setup_teardown(
     yield
 
     if 'pensando' in dpuhost.facts['asic_type']:
-        apply_messages(localhost, duthost, ptfhost, pl.ENI_ROUTE_GROUP1_CONFIG, dpuhost.dpu_index, False)
-        apply_messages(localhost, duthost, ptfhost, pl.ENI_TRUSTED_VNI_CONFIG, dpuhost.dpu_index, False)
-        apply_messages(localhost, duthost, ptfhost, meter_rule_messages, dpuhost.dpu_index, False)
-        apply_messages(localhost, duthost, ptfhost, route_and_mapping_messages, dpuhost.dpu_index, False)
-        apply_messages(localhost, duthost, ptfhost, base_config_messages, dpuhost.dpu_index, False)
+        # unconfiguring DASH configs in reverse order
+        unconfig_order = {
+            **pl.ENI_ROUTE_GROUP1_CONFIG,
+            **pl.ENI_FNIC_CONFIG,
+            **pl.PLNSG_ENDPOINT_VNET_MAPPING_2_CONFIG,
+            **pl.PE_VNET_MAPPING_WITH_PORTMAP_CONFIG,
+            **pl.PE_SUBNET_ROUTE_CONFIG,
+            **pl.VM_SUBNET_ROUTE_WITH_TUNNEL_SINGLE_ENDPOINT,
+            **pl.TUNNEL3_CONFIG,
+            **pl.TUNNEL1_CONFIG,
+            **pl.FP_RD_PORTMAP_RANGE_CONFIG,
+            **pl.FP_RD_PORTMAP_CONFIG,
+            **pl.METER_POLICY_V4_CONFIG,
+            **pl.ROUTE_GROUP1_CONFIG,
+            **pl.VNET2_CONFIG,
+            **pl.VNET_CONFIG,
+            **pl.APPLIANCE_FNIC_CONFIG
+        }
+        apply_messages(localhost, duthost, ptfhost, unconfig_order, dpuhost.dpu_index, False)
     else:
         # Route rule removal is broken so config reload to cleanup for now
         # https://github.com/sonic-net/sonic-buildimage/issues/23590
