@@ -48,7 +48,6 @@ FASTPATH_FLOW = {"1": {
 @pytest.fixture(scope="module")
 def dpu_setup(duthost, dpuhosts, dpu_index, skip_config):
     if skip_config:
-
         return
     dpuhost = dpuhosts[dpu_index]
     # explicitly add mgmt IP route so default route doesn't disrupt SSH
@@ -70,7 +69,7 @@ def dpu_setup(duthost, dpuhosts, dpu_index, skip_config):
     if dpuhost.dpu_data_port_ip  in intfs and dpuhost.npu_data_port_ip is not None:
         dpu_cmds.append(f"ip route replace default via {dpuhost.npu_data_port_ip}")
         dpuhost.shell_cmds(cmds=f"ip route replace default via {dpuhost.npu_data_port_ip}")
-        intfs = dpuhost.shell("show ip interfaces")["stdout"]
+        dpuhost.shell("show ip interfaces")["stdout"]
 
 
 @pytest.fixture(scope="module")
@@ -238,6 +237,7 @@ def test_pl_fastpath(ptfadapter, dash_pl_config, fastpath_tc):
           TCP ACK -------->
     """
     tunnel_endpoint_counts = {ip: 0 for ip in pl.TUNNEL1_ENDPOINT_IPS}
+    vm_to_dpu_pkt = exp_dpu_to_pe_pkt = pe_to_dpu_pkt = exp_dpu_to_vm_pkt = None
 
     # Build test packet
     _flow_num = 0
@@ -405,6 +405,7 @@ def test_plnsg_fastpath(ptfadapter, dash_pl_config, fastpath_tc):
           TCP ACK -------->
     """
     tunnel_endpoint_counts = {ip: 0 for ip in pl.TUNNEL1_ENDPOINT_IPS}
+    vm_to_dpu_pkt = exp_dpu_to_pe_pkt = pe_to_dpu_pkt = exp_dpu_to_vm_pkt = None
 
     # Build test packet
     _flow_num = 0
