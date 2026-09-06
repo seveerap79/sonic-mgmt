@@ -329,7 +329,7 @@ def test_system_health_summary(duthosts, dpuhosts,
     result = parse_system_health_summary(output_health_summary['stdout'])
 
     pytest_assert(result, "Switch health status is not ok")
- 
+
     # Checking system-health summary on DPU
     for index in range(len(dpu_on_list)):
         dpu_name = dpu_on_list[index]
